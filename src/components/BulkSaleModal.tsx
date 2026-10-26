@@ -1,0 +1,330 @@
+import { useState } from 'react';
+import { supabase, type Lens } from '@/lib/supabase';
+import {
+  Tag,
+  X,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  Calendar,
+  Trash2,
+  Percent,
+  DollarSign,
+} from 'lucide-react';
+
+export function BulkSaleModal({
+  lenses,
+  onClose,
+  onUpdated,
+}: {
+  lenses: Lens[];
+  onClose: () => void;
+  onUpdated: () => void;
+}) {
+  const [onSale, setOnSale] = useState(true);
+  const [discountType, setDiscountType] = useState<'percent' | 'amount'>('percent');
+  const [discountValue, setDiscountValue] = useState('');
+  const [salePrice, setSalePrice] = useState('');
+  const [saleNote, setSaleNote] = useState('');
+  const [saleEndsAt, setSaleEndsAt] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  const handleSubmit = async () => {
+    setSaving(true);
+    setError(null);
+
+    if (onSale && saleEndsAt.trim() === '') {
+      setError('Дата окончания акции обязательна');
+      setSaving(false);
+      return;
+    }
+
+    const dv = discountValue.trim() === '' ? null : Number(discountValue);
+    if (onSale && dv == null && salePrice.trim() === '') {
+      setError('Укажите скидку (процент или сумму) или фиксированную цену');
+      setSaving(false);
+      return;
+    }
+    if (onSale && dv != null && isNaN(dv)) {
+      setError('Скидка должна быть числом');
+      setSaving(false);
+      return;
+    }
+    if (onSale && dv != null && discountType === 'percent' && (dv <= 0 || dv > 100)) {
+      setError('Процент скидки должен быть от 1 до 100');
+      setSaving(false);
+      return;
+    }
+
+    const priceNum = salePrice.trim() === '' ? null : Number(salePrice);
+    if (priceNum !== null && (isNaN(priceNum) || priceNum < 0)) {
+      setError('Фиксированная цена должна быть числом больше 0');
+      setSaving(false);
+      return;
+    }
+
+    const endsAt = saleEndsAt.trim() === '' ? null : new Date(saleEndsAt + 'T23:59:59').toISOString();
+
+    const ids = lenses.map((l) => l.id);
+
+    const updates: Record<string, unknown> = {
+      on_sale: onSale,
+      sale_discount_type: onSale ? discountType : null,
+      sale_discount_value: onSale ? (dv ?? null) : null,
+      sale_note: onSale ? (saleNote.trim() || null) : null,
+      sale_ends_at: onSale ? endsAt : null,
+    };
+
+    if (onSale && priceNum != null) {
+      updates.sale_price = priceNum;
+    } else if (onSale && dv != null && discountType === 'percent') {
+      // Per-lens computed price — can't set a single value for all lenses with different prices
+      // So we leave sale_price null and let the frontend compute it from discount
+      updates.sale_price = null;
+    } else if (onSale && dv != null && discountType === 'amount') {
+      // For amount discount, we also can't set a single sale_price for all lenses
+      updates.sale_price = null;
+    } else if (!onSale) {
+      updates.sale_price = null;
+    }
+
+    const { data: updatedData, error: updateError } = await supabase
+      .from('lenses')
+      .update(updates)
+      .in('id', ids)
+      .select();
+
+    if (updateError) {
+      setError(updateError.message);
+      setSaving(false);
+    } else if (!updatedData || updatedData.length === 0) {
+      setError('Акция не применена — нет прав. Проверьте, что вы вошли как администратор.');
+      setSaving(false);
+    } else {
+      setDone(true);
+      setTimeout(() => {
+        onUpdated();
+        onClose();
+      }, 800);
+    }
+  };
+
+  const handleRemoveSale = async () => {
+    setSaving(true);
+    setError(null);
+    const ids = lenses.map((l) => l.id);
+    const { data: removedData, error: updateError } = await supabase
+      .from('lenses')
+      .update({
+        on_sale: false,
+        sale_price: null,
+        sale_note: null,
+        sale_ends_at: null,
+        sale_discount_type: null,
+        sale_discount_value: null,
+      })
+      .in('id', ids)
+      .select();
+
+    if (updateError) {
+      setError(updateError.message);
+      setSaving(false);
+    } else if (!removedData || removedData.length === 0) {
+      setError('Не удалось снять акции — нет прав. Проверьте, что вы вошли как администратор.');
+      setSaving(false);
+    } else {
+      setDone(true);
+      setTimeout(() => {
+        onUpdated();
+        onClose();
+      }, 800);
+    }
+  };
+
+  const inputClass = 'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-100';
+  const labelClass = 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" />
+      <div
+        className="relative z-10 w-full max-w-md rounded-2xl bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-slate-100 p-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+              <Tag className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Массовая акция</h2>
+              <p className="text-xs text-slate-500">{lenses.length} линз выбрано</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="max-h-[60vh] overflow-y-auto p-6">
+          {done ? (
+            <div className="flex flex-col items-center justify-center py-12">
+              <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100">
+                <CheckCircle2 className="h-7 w-7 text-emerald-600" />
+              </div>
+              <p className="text-base font-semibold text-slate-900">Акция применена к {lenses.length} линзам</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <label className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-700">Акция активна</p>
+                  <p className="text-xs text-slate-400">Включите, чтобы выделить линзы в каталоге</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOnSale(!onSale)}
+                  className={`relative h-6 w-11 rounded-full transition ${onSale ? 'bg-rose-500' : 'bg-slate-300'}`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${onSale ? 'left-[22px]' : 'left-0.5'}`}
+                  />
+                </button>
+              </label>
+
+              {onSale && (
+                <>
+                  <div>
+                    <label className={labelClass}>Тип скидки</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDiscountType('percent')}
+                        className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                          discountType === 'percent'
+                            ? 'border-rose-400 bg-rose-50 text-rose-700'
+                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                        }`}
+                      >
+                        <Percent className="h-4 w-4" />
+                        Процент
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDiscountType('amount')}
+                        className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                          discountType === 'amount'
+                            ? 'border-rose-400 bg-rose-50 text-rose-700'
+                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                        }`}
+                      >
+                        <DollarSign className="h-4 w-4" />
+                        Сумма
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>
+                      {discountType === 'percent' ? 'Скидка (%)' : 'Скидка (сумма)'}
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={discountValue}
+                        onChange={(e) => setDiscountValue(e.target.value)}
+                        placeholder={discountType === 'percent' ? 'Например: 20' : 'Например: 500'}
+                        className={inputClass}
+                      />
+                      {discountType === 'percent' && (
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">%</span>
+                      )}
+                    </div>
+                    {discountType === 'percent' && (
+                      <p className="mt-1 text-xs text-slate-400">
+                        Цена со скидкой будет рассчитана автоматически для каждой линзы
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Фиксированная цена (необязательно)</label>
+                    <input
+                      type="number"
+                      value={salePrice}
+                      onChange={(e) => setSalePrice(e.target.value)}
+                      placeholder="Своё значение цены для всех"
+                      className={inputClass}
+                    />
+                    <p className="mt-1 text-xs text-slate-400">
+                      Перекрывает расчётную цену. Применится ко всем выбранным линзам.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Условия акции</label>
+                    <textarea
+                      value={saleNote}
+                      onChange={(e) => setSaleNote(e.target.value)}
+                      rows={3}
+                      placeholder="Например: Скидка 20% при заказе от 2 штук"
+                      className={`resize-none ${inputClass}`}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={`${labelClass} flex items-center gap-1.5`}>
+                      <Calendar className="h-3.5 w-3.5" />
+                      Дата окончания акции <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={saleEndsAt}
+                      onChange={(e) => setSaleEndsAt(e.target.value)}
+                      required
+                      className={inputClass}
+                    />
+                    <p className="mt-1 text-xs text-rose-400">
+                      Обязательное поле — без даты акция не сохранится
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {error && (
+                <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                  {error}
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={handleRemoveSale}
+                  disabled={saving}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-500 transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Снять акции
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={saving}
+                  className="ml-auto flex items-center gap-2 rounded-lg bg-rose-500 px-5 py-2 text-sm font-semibold text-white transition hover:bg-rose-600 disabled:opacity-50"
+                >
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                  Применить к {lenses.length} линзам
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
